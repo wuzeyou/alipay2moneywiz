@@ -115,7 +115,7 @@ function mapAccount(recordStr) {
 function getOutputName() {
   const now = new Date();
   const date = now.getFullYear() + '_' + (now.getMonth() + 1).toString() + '_' + now.getDate();
-  return `微信账单_${date}.csv`;
+  return `【生成】微信账单_${date}.csv`;
 }
 
 // main().then(
