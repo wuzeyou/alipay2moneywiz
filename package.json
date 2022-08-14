@@ -1,0 +1,21 @@
+{
+  "name": "moneywiz-csv",
+  "version": "1.0.0",
+  "description": "generate moneywiz-formated .csv",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "alipay": "node alipay.js",
+    "wechat": "node wechat.js"
+  },
+  "keywords": [
+    "csv",
+    "moneywiz"
+  ],
+  "author": "joe.w",
+  "license": "ISC",
+  "dependencies": {
+    "csv": "^6.2.0",
+    "iconv-lite": "^0.6.3"
+  }
+}
