@@ -60,6 +60,9 @@ async function mainProcess(source) {
   // process all records
   const transactions = [];
   records.forEach(record => {
+    if (record['交易状态'] == '交易关闭') {
+      return;
+    }
     let transaction = {};
     transaction['日期'] = parseDate(record['交易时间']);
     transaction['描述'] = record['商品说明'];
