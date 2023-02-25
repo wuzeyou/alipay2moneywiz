@@ -32,15 +32,12 @@ async function mainProcess(source) {
     input: fileStream,
   });
   // remove unused line of csv
-  let numberOfDash = 0;
   let realContent = '';
+  let belowAreRealContent = false;
   for await (let input of rl) {
     if (input.startsWith('--')) {
-      numberOfDash++;
-      if (numberOfDash > 1) {
-        break;
-      }
-    } else {
+        belowAreRealContent = input.includes("支付宝")
+    } else if (belowAreRealContent) {
       // remove the last ',' of the line
       if (input.endsWith(',')) {
         input = input.substring(0, input.length - 1);
@@ -67,17 +64,7 @@ async function mainProcess(source) {
     transaction['日期'] = parseDate(record['交易时间']);
     transaction['描述'] = record['商品说明'];
     transaction['账户'] = mapAccount(record['收/付款方式']);
-    if (record['收/支'] == '其他') {
-      transaction['交易对方'] = '';
-      transaction['分类'] = '';
-      transaction['转账'] = mapAccount(record['交易对方']);
-      if (record['商品说明'].includes("还款")) {
-        const fee = -Math.abs(record['金额']);
-        transaction['金额'] = fee.toString();
-      } else {
-        transaction['金额'] = record['金额'];
-      }
-    } else {
+    if (record['收/支'] == '收入' || record['收/支'] == '支出') {
       transaction['交易对方'] = record['交易对方'];
       transaction['分类'] = record['交易分类'];
       transaction['转账'] = '';
@@ -85,6 +72,16 @@ async function mainProcess(source) {
         const fee = -Math.abs(record['金额']);
         transaction['金额'] = fee.toString();
       } else if (record['收/支'] == '收入') {
+        transaction['金额'] = record['金额'];
+      }
+    } else {
+      transaction['交易对方'] = '';
+      transaction['分类'] = '';
+      transaction['转账'] = mapAccount(record['交易对方']);
+      if (record['商品说明'].includes("还款")) {
+        const fee = -Math.abs(record['金额']);
+        transaction['金额'] = fee.toString();
+      } else {
         transaction['金额'] = record['金额'];
       }
     }
@@ -124,7 +121,7 @@ function mapAccount(recordStr) {
       return ACCOUNT_MAP[k];
     }
   }
-  return recordStr;
+  return "";
 }
 
 function getOutputName() {
