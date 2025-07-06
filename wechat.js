@@ -3,6 +3,7 @@ import * as fs from "fs";
 import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
 import * as readline from 'node:readline'
+import XLSX from 'xlsx';
 
 const ACCOUNT_MAP = JSON.parse(await fsp.readFile("account_map.json"));
 
@@ -12,7 +13,7 @@ function main() {
     input: process.stdin,
     output: process.stdout
   });
-  query.question('\n***微信账单转换***\n\n\n请输入原csv文件路径:\n\n', (answer) => {
+  query.question('\n***微信账单转换***\n\n\n请输入原文件路径(支持csv和xlsx格式):\n\n', (answer) => {
     const reg = /\\/g;
     mainProcess(answer.trim().replace(reg, ''));
     query.close();
@@ -20,30 +21,73 @@ function main() {
 }
 
 async function mainProcess(source) {
-  // read line by line
-  const fileStream = fs.createReadStream(source);
-  const rl = readline.createInterface({
-    input: fileStream,
-  });
-  // remove unused line of csv
-  let numberOfDash = 0;
-  let realContent = '';
-  for await (let input of rl) {
-    if (input.startsWith('--')) {
-      numberOfDash++;
-      continue;
+  let records;
+  
+  // 检测文件格式
+  const fileExtension = source.toLowerCase().split('.').pop();
+  
+  if (fileExtension === 'xlsx') {
+    // 处理xlsx文件
+    const workbook = XLSX.readFile(source);
+    const sheetName = workbook.SheetNames[0]; // 取第一个sheet
+    const worksheet = workbook.Sheets[sheetName];
+    
+    // 转换为数组格式
+    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+    
+    // 找到表头行（包含"交易时间"等字段的行）
+    let headerIndex = -1;
+    for (let i = 0; i < jsonData.length; i++) {
+      const row = jsonData[i];
+      if (row && row.length > 0 && row.includes('交易时间')) {
+        headerIndex = i;
+        break;
+      }
     }
-    if (numberOfDash > 0) {
-      realContent += input + '\n';
+    
+    if (headerIndex === -1) {
+      throw new Error('无法找到数据表头，请检查xlsx文件格式');
     }
-  }
+    
+    // 提取表头和数据
+    const headers = jsonData[headerIndex];
+    const dataRows = jsonData.slice(headerIndex + 1).filter(row => row && row.length > 0);
+    
+    // 转换为对象数组
+    records = dataRows.map(row => {
+      const record = {};
+      headers.forEach((header, index) => {
+        record[header] = row[index] || '';
+      });
+      return record;
+    });
+    
+  } else {
+    // 处理csv文件（保持原有逻辑）
+    const fileStream = fs.createReadStream(source);
+    const rl = readline.createInterface({
+      input: fileStream,
+    });
+    // remove unused line of csv
+    let numberOfDash = 0;
+    let realContent = '';
+    for await (let input of rl) {
+      if (input.startsWith('--')) {
+        numberOfDash++;
+        continue;
+      }
+      if (numberOfDash > 0) {
+        realContent += input + '\n';
+      }
+    }
 
-  // parse the csv content to object
-  const records = parse(realContent, {
-    delimiter: ',',
-    columns: true,
-    trim: true,
-  });
+    // parse the csv content to object
+    records = parse(realContent, {
+      delimiter: ',',
+      columns: true,
+      trim: true,
+    });
+  }
 
   // process all records
   const transactions = [];
