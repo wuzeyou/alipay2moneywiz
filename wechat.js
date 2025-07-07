@@ -136,12 +136,15 @@ async function mainProcess(source) {
 
 function parseDate(dateStr) {
   const dateObj = new Date(dateStr);
-  return dateObj.toLocaleString();
-  // const time = dateObj.toLocaleTimeString('zh-CN', {
-  //   hourCycle: "h24",
-  // });
-  // transaction['日期'] = date;
-  // transaction['时间'] = time;
+  return dateObj.toLocaleString('zh-CN', {
+    hourCycle: "h24",
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
 }
 
 function mapAccount(recordStr) {
