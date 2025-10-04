@@ -105,7 +105,7 @@ async function mainProcess(source) {
 function parseDate(dateStr) {
   const dateObj = new Date(dateStr);
   return dateObj.toLocaleString('zh-CN', {
-    hourCycle: "h24",
+    hourCycle: "h23",
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
