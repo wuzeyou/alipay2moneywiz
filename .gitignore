@@ -90,3 +90,4 @@ sw.*
 # Vim swap files
 *.swp
 
+bills/
