@@ -5,6 +5,9 @@ config/payee_rules.json
 config/description_rules.json
 config/credit_card_bills.json
 
+# Personal CLAUDE.md (root only; archive/CLAUDE.md is tracked)
+/CLAUDE.md
+
 # Bills and processed data
 bills/
 *.csv
