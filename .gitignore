@@ -8,6 +8,9 @@ config/credit_card_bills.json
 # Personal CLAUDE.md (root only; archive/CLAUDE.md is tracked)
 /CLAUDE.md
 
+# Personal Claude Code config (hooks, local settings, etc.)
+.claude/
+
 # Bills and processed data
 bills/
 *.csv
