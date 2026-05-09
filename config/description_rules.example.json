@@ -1,0 +1,47 @@
+{
+  "_comment": "Description simplification rules - remove noise from transaction descriptions. Copy to description_rules.json and customize.",
+  "_updated": "YYYY-MM-DD",
+
+  "payee_description": {
+    "_comment": "Override description based on payee name match",
+    "麦当劳": "麦当劳",
+    "肯德基": "肯德基",
+    "全家": "全家",
+    "盒马": "盒马买菜"
+  },
+
+  "remove_patterns": [
+    "-\\d{20,}",
+    "-美团App.*$",
+    "-美团订单.*$",
+    "外卖订单$",
+    "（[^）]*店）",
+    "\\([^)]*店\\)",
+    "（[^）]*分店）",
+    "\\([^)]*分店\\)",
+    "·[^·]+店[）\\)]?$",
+    "^【堂食】_.*$",
+    "^商户消费$",
+    "票订单支付，订单id:[\\d,]+"
+  ],
+
+  "replacements": {
+    "瑞幸咖啡[（\\(][^）\\)]*[）\\)]": "瑞幸咖啡",
+    "汉堡王[（\\(][^）\\)]*[）\\)]": "汉堡王",
+    "肯德基宅急送": "肯德基",
+    "团购-美团微信小程序": "美团外卖",
+    "团购-大众点评微信小程序": "美团外卖",
+    "美团/大众点评点餐订单": "美团外卖"
+  },
+
+  "simplify_suffixes": [
+    "等多件$",
+    "等\\d+类商品$",
+    "等\\d+件$"
+  ],
+
+  "keep_prefixes": [
+    "退款-",
+    "转账备注:"
+  ]
+}

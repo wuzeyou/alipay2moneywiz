@@ -1,0 +1,30 @@
+{
+  "_comment": "Account mapping from bill payment method to MoneyWiz account name. Copy this file to account_map.json and fill in your real accounts.",
+  "_updated": "YYYY-MM-DD",
+
+  "bank_cards": {
+    "1234": "<your-card-1-name-in-moneywiz>",
+    "5678": "<your-card-2-name-in-moneywiz>"
+  },
+
+  "keywords": {
+    "账户余额": "支付宝余额",
+    "余额宝": "支付宝余额",
+    "花呗": "花呗",
+    "零钱": "微信零钱",
+    "零钱通": "微信零钱",
+    "京东白条": "京东白条",
+    "数字人民币": "数字人民币",
+    "建设银行": "<your-ccb-account>",
+    "招商银行": "<your-cmb-account>",
+    "中信银行": "<your-citic-account>",
+    "中国银行": "<your-boc-account>",
+    "工商银行": "<your-icbc-account>",
+    "农业银行": "<your-abc-account>"
+  },
+
+  "defaults": {
+    "alipay": "支付宝余额",
+    "wechat": "微信零钱"
+  }
+}
