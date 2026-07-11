@@ -82,6 +82,85 @@ def find_account_pk(conn: sqlite3.Connection, account_name: str):
     return row[0] if row else None
 
 
+def fix_refund_categories(conn: sqlite3.Connection, tx_pks: list, dry_run: bool) -> list:
+    """Repair category assignments on converted refunds.
+
+    MoneyWiz's CSV importer matches categories per transaction type: a refund
+    imported as Income gets its category looked up among income categories
+    only, so an expense category name produces a brand-new top-level clone
+    (same ZNAME2, higher Z_PK, no other references). Redirect assignments to
+    the original category and drop the clone once unreferenced.
+
+    Returns list of (category_name, clone_pk, original_pk).
+    """
+    if not tx_pks:
+        return []
+
+    placeholders = ",".join("?" * len(tx_pks))
+    assignments = conn.execute(
+        f"SELECT Z_PK, ZTRANSACTION, ZCATEGORY FROM ZCATEGORYASSIGMENT "
+        f"WHERE ZTRANSACTION IN ({placeholders}) AND ZCATEGORY IS NOT NULL",
+        tx_pks,
+    ).fetchall()
+
+    by_category = {}
+    for assign_pk, tx_pk, cat_pk in assignments:
+        by_category.setdefault(cat_pk, []).append(assign_pk)
+
+    fixes = []
+    for cat_pk, assign_pks in by_category.items():
+        row = conn.execute(
+            "SELECT ZNAME2 FROM ZSYNCOBJECT WHERE Z_PK = ? AND Z_ENT = 19",
+            (cat_pk,),
+        ).fetchone()
+        if not row:
+            continue
+        cat_name = row[0]
+
+        # The original category is an earlier one with the same name
+        orig = conn.execute(
+            "SELECT Z_PK FROM ZSYNCOBJECT "
+            "WHERE Z_ENT = 19 AND ZNAME2 = ? AND Z_PK < ? ORDER BY Z_PK LIMIT 1",
+            (cat_name, cat_pk),
+        ).fetchone()
+        if not orig:
+            continue
+
+        # Only treat as importer-created clone when nothing outside this
+        # batch references it and it has no subcategories
+        external_refs = conn.execute(
+            f"SELECT COUNT(*) FROM ZCATEGORYASSIGMENT "
+            f"WHERE ZCATEGORY = ? AND ZTRANSACTION IS NOT NULL "
+            f"AND ZTRANSACTION NOT IN ({placeholders})",
+            [cat_pk] + tx_pks,
+        ).fetchone()[0]
+        children = conn.execute(
+            "SELECT COUNT(*) FROM ZSYNCOBJECT WHERE ZPARENTCATEGORY = ?",
+            (cat_pk,),
+        ).fetchone()[0]
+        if external_refs or children:
+            continue
+
+        if not dry_run:
+            for assign_pk in assign_pks:
+                conn.execute(
+                    "UPDATE ZCATEGORYASSIGMENT SET ZCATEGORY = ? WHERE Z_PK = ?",
+                    (orig[0], assign_pk),
+                )
+            # Orphan assignment rows (no transaction) also pin the clone
+            conn.execute(
+                "DELETE FROM ZCATEGORYASSIGMENT "
+                "WHERE ZCATEGORY = ? AND ZTRANSACTION IS NULL",
+                (cat_pk,),
+            )
+            conn.execute(
+                "DELETE FROM ZSYNCOBJECT WHERE Z_PK = ? AND Z_ENT = 19",
+                (cat_pk,),
+            )
+        fixes.append((cat_name, cat_pk, orig[0]))
+    return fixes
+
+
 def find_refund_match(
     conn: sqlite3.Connection,
     account_pk: int,
@@ -191,6 +270,8 @@ def main():
                     )
                 success.append((tx, pk))
 
+        cat_fixes = fix_refund_categories(conn, [pk for _, pk in success], dry_run)
+
         if not dry_run:
             conn.commit()
     except Exception as e:
@@ -206,6 +287,12 @@ def main():
     print(f"Result: {len(success)}/{len(refunds)} {verb}")
     for tx, pk in success:
         print(f"  ✓ {tx['date'][:16]} {tx['description'][:30]:30s} {tx['amount']:>8s}  Z_PK={pk}")
+
+    if cat_fixes:
+        verb = "would fix" if dry_run else "fixed"
+        print(f"\nCategory fixes ({verb} importer-created clones): {len(cat_fixes)}")
+        for name, clone_pk, orig_pk in cat_fixes:
+            print(f"  ✓ {name}: clone Z_PK={clone_pk} -> original Z_PK={orig_pk}")
 
     if failures:
         print(f"\nFailures: {len(failures)}")
