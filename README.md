@@ -91,13 +91,13 @@ alipay2moneywiz/
 
 ## 退款处理（核心特性）
 
-MoneyWiz 的 CSV 导入器仅支持 Income / Withdraw / Transfer 三种类型，**无法直接生成 Refund (Z_ENT=43)**。本 Skill 的处理方式：
+MoneyWiz 的 CSV 导入器仅支持 Income / Withdraw / Transfer 三种类型，**无法直接生成 Refund (Z_ENT=44)**。本 Skill 的处理方式：
 
-1. 解析阶段识别退款（支付宝 `交易分类=退款`、微信 `交易类型` 含 `-退款`），在 JSON 标记 `is_refund: true`，CSV 写为 Income。
+1. 解析阶段识别退款（支付宝 `交易分类=退款`、微信 `交易类型` 含 `-退款`），在 JSON 标记 `is_refund: true`，CSV 写为 Income，分类占位用收入分类「退款收入」（写支出分类名会被导入器克隆成同名收入分类）。
 2. 你在 MoneyWiz 完成 CSV 导入。
-3. 运行 `convert_refunds.py`，自动关闭 MoneyWiz、备份数据库到 `./bills/backups/`、把刚导入的 Income 条目按严格匹配（账户 + 金额 + 描述 + ±5min 时间窗口）UPDATE 为 Refund。
+3. 运行 `convert_refunds.py`，自动关闭 MoneyWiz、备份数据库到 `./bills/backups/`、把刚导入的 Income 条目按严格匹配（账户 + 金额 + 描述 + ±5min 时间窗口）UPDATE 为 Refund，再按 `category_pk` 把分类指回原消费分类、按 `original_tx_pk` 关联原消费交易，并清理导入器克隆出的分类。
 
-Refund (Z_ENT=43) 与 Income (Z_ENT=37) 在数据库中字段完全一致，仅 `Z_ENT` 标记不同——本 Skill 利用了这个事实，绕过 CSV 导入器的限制。
+Refund (Z_ENT=44) 与 Income (Z_ENT=38) 在数据库中字段完全一致，仅 `Z_ENT` 标记不同——本 Skill 利用了这个事实，绕过 CSV 导入器的限制。注意 Z_ENT 编号随 MoneyWiz 升级迁移模型而漂移（此处为 2026-07 之后的编号），以 `Z_PRIMARYKEY` 表为准。
 
 ## 数据库安全
 
