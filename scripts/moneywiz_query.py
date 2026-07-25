@@ -14,8 +14,10 @@ DB_PATH = Path.home() / "Library/Containers/com.moneywiz.personalfinance/Data/Do
 # Core Data timestamp offset (2001-01-01 to 1970-01-01)
 COREDATA_OFFSET = 978307200
 
-# Transaction types: Deposit(37), TransferDeposit(45), TransferWithdraw(46), Withdraw(47)
-TRANSACTION_TYPES = (37, 45, 46, 47)
+# Z_ENT values for the 2026-07 Core Data model; they shift whenever a MoneyWiz
+# update migrates the model. Verify: SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY;
+# Deposit(38), Refund(44), TransferDeposit(46), TransferWithdraw(47), Withdraw(48)
+TRANSACTION_TYPES = (38, 44, 46, 47, 48)
 
 
 def get_connection():
@@ -41,7 +43,7 @@ def query_accounts(show_archived=False):
     sql = """
     SELECT Z_PK, ZNAME, ZTYPE, ZCURRENCYNAME, ZBALLANCE, ZOPENINGBALANCE, ZARCHIVED
     FROM ZSYNCOBJECT
-    WHERE Z_ENT IN (9,10,11,12,13,14,15,16)
+    WHERE Z_ENT IN (10,11,12,13,14,15,16,17)
     """
     if not show_archived:
         sql += " AND (ZARCHIVED = 0 OR ZARCHIVED IS NULL)"
@@ -83,7 +85,7 @@ def query_recent(limit=20):
     rows = cursor.fetchall()
     conn.close()
 
-    type_map = {37: "收入", 45: "转入", 46: "转出", 47: "支出"}
+    type_map = {38: "收入", 44: "退款", 46: "转入", 47: "转出", 48: "支出"}
     print(f"\n{'Date':<20} {'Amount':>12} {'Type':<4} {'Account':<12} {'Description'}")
     print("-" * 75)
     for row in rows:
@@ -107,7 +109,7 @@ def query_monthly(months=6):
         SUM(CASE WHEN ZAMOUNT1 < 0 THEN ABS(ZAMOUNT1) ELSE 0 END) as Expense,
         SUM(ZAMOUNT1) as Net
     FROM ZSYNCOBJECT
-    WHERE Z_ENT IN (37, 47) AND ZDATE1 IS NOT NULL
+    WHERE Z_ENT IN (38, 44, 48) AND ZDATE1 IS NOT NULL
     GROUP BY Month
     ORDER BY Month DESC
     LIMIT ?
@@ -141,7 +143,7 @@ def query_categories(year_month=None):
     JOIN ZCATEGORYASSIGMENT ca ON t.Z_PK = ca.ZTRANSACTION
     JOIN ZSYNCOBJECT c ON ca.ZCATEGORY = c.Z_PK
     LEFT JOIN ZSYNCOBJECT pc ON c.ZPARENTCATEGORY = pc.Z_PK
-    WHERE t.Z_ENT = 47
+    WHERE t.Z_ENT = 48
       AND t.ZAMOUNT1 < 0
       AND strftime('%Y-%m', datetime(t.ZDATE1 + {COREDATA_OFFSET}, 'unixepoch', 'localtime')) = ?
     GROUP BY c.Z_PK
@@ -177,7 +179,7 @@ def query_payees(limit=15):
         AVG(ABS(t.ZAMOUNT1)) as Avg
     FROM ZSYNCOBJECT t
     JOIN ZSYNCOBJECT p ON t.ZPAYEE2 = p.Z_PK
-    WHERE t.Z_ENT = 47 AND t.ZAMOUNT1 < 0
+    WHERE t.Z_ENT = 48 AND t.ZAMOUNT1 < 0
     GROUP BY p.Z_PK
     ORDER BY Total DESC
     LIMIT ?
@@ -219,7 +221,7 @@ def search_transactions(keyword, limit=30):
     rows = cursor.fetchall()
     conn.close()
 
-    type_map = {37: "收入", 45: "转入", 46: "转出", 47: "支出"}
+    type_map = {38: "收入", 44: "退款", 46: "转入", 47: "转出", 48: "支出"}
     print(f"\nSearch results for '{keyword}':")
     print(f"\n{'Date':<20} {'Amount':>12} {'Type':<4} {'Account':<12} {'Description'}")
     print("-" * 70)

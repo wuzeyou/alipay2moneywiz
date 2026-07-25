@@ -8,7 +8,7 @@ description: Convert Alipay/WeChat bill exports to MoneyWiz-compatible CSV with 
 ## 功能概览
 
 - **账单导入**：支付宝/微信账单 → MoneyWiz 兼容 CSV，含智能分类预测、商户/描述简化
-- **退款转换**：MoneyWiz CSV 不支持 Refund 类型，导入后由脚本将 Income (Z_ENT=37) UPDATE 为 Refund (Z_ENT=43)
+- **退款转换**：MoneyWiz CSV 不支持 Refund 类型，导入后由脚本将 Income (Z_ENT=38) UPDATE 为 Refund (Z_ENT=44)，并把分类指回原消费分类、关联原消费交易
 - **轻量数据查询**：账单导入过程中读取 MoneyWiz 历史数据，用于推测分类、验证账户与分类是否存在
 
 ## 前置条件
@@ -42,24 +42,33 @@ strftime('%s', 'now') - 978307200
 strftime('%s', '2024-01-01') - 978307200
 ```
 
+### ⚠️ Z_ENT 随 App 升级漂移
+
+Z_ENT 编号由 Core Data 模型决定，MoneyWiz 升级迁移模型时会整体变动（2026-07 升级把 Account 及之后的实体编号整体 +1）。本文档编号对应 2026-07 之后的模型。怀疑漂移时以数据库为准：
+
+```sql
+SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY ORDER BY Z_ENT;
+```
+
 ## 实体类型速查 (Z_ENT)
 
 只列出账单导入流程涉及的实体：
 
 | Z_ENT | 类型 | 关键字段 |
 |-------|------|----------|
-| 9-16 | 账户 (Account) | ZNAME, ZCURRENCYNAME, ZBALLANCE |
-| 19 | 分类 (Category) | ZNAME2, ZPARENTCATEGORY |
-| 28 | 商户 (Payee) | ZNAME5 |
-| 37 | 收入 (Deposit) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2, ZPAYEE2 |
-| 43 | 退款 (RefundTransaction) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2, ZPAYEE2 |
-| 45 | 转账收入 (TransferDeposit) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2 |
-| 46 | 转账支出 (TransferWithdraw) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2 |
-| 47 | 支出 (Withdraw) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2, ZPAYEE2 |
+| 10-17 | 账户 (Account) | ZNAME, ZCURRENCYNAME, ZBALLANCE |
+| 20 | 分类 (Category) | ZNAME2, ZPARENTCATEGORY, ZTYPE2（1=支出，2=收入）|
+| 29 | 商户 (Payee) | ZNAME5 |
+| 38 | 收入 (Deposit) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2, ZPAYEE2 |
+| 44 | 退款 (RefundTransaction) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2, ZPAYEE2 |
+| 46 | 转账收入 (TransferDeposit) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2 |
+| 47 | 转账支出 (TransferWithdraw) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2 |
+| 48 | 支出 (Withdraw) | ZDATE1, ZAMOUNT1, ZDESC2, ZACCOUNT2, ZPAYEE2 |
+| 51 | 退款关联 (WithdrawRefundTransactionLink) | 独立表 ZWITHDRAWREFUNDTRANSACTIONLINK：ZREFUNDTRANSACTION, ZWITHDRAWTRANSACTION |
 
 **金额规则**: 负数 = 支出，正数 = 收入
 
-**常用交易类型组合**: `Z_ENT IN (37, 43, 45, 46, 47)` - 包含收入、退款、支出、转账
+**常用交易类型组合**: `Z_ENT IN (38, 44, 46, 47, 48)` - 包含收入、退款、支出、转账
 
 ## 常用查询
 
@@ -68,7 +77,7 @@ strftime('%s', '2024-01-01') - 978307200
 ```sql
 SELECT Z_PK, ZNAME, ZCURRENCYNAME, ZBALLANCE, ZARCHIVED
 FROM ZSYNCOBJECT
-WHERE Z_ENT IN (9,10,11,12,13,14,15,16)
+WHERE Z_ENT IN (10,11,12,13,14,15,16,17)
 ORDER BY ZARCHIVED, ZNAME;
 ```
 
@@ -78,7 +87,7 @@ ORDER BY ZARCHIVED, ZNAME;
 
 公式：`余额 = ZOPENINGBALANCE + SUM(该账户所有交易的 ZAMOUNT1)`
 
-必须包含所有交易类型（Z_ENT IN 37, 43, 45, 46, 47），不能遗漏 43 (RefundTransaction)。
+必须包含所有交易类型（Z_ENT IN 38, 44, 46, 47, 48），不能遗漏 44 (RefundTransaction)。
 
 ```sql
 -- 计算单个账户余额，将 :account_pk 替换为账户 Z_PK
@@ -93,7 +102,7 @@ WHERE a.Z_PK = :account_pk;
 ```
 
 ```sql
--- 计算所有活跃账户余额（排除投资账户 Z_ENT=16）
+-- 计算所有活跃账户余额（排除投资账户 Z_ENT=17）
 SELECT
     a.Z_PK,
     a.ZNAME as Account,
@@ -101,7 +110,7 @@ SELECT
     ROUND(COALESCE(a.ZOPENINGBALANCE, 0) + COALESCE(SUM(t.ZAMOUNT1), 0), 2) as Balance
 FROM ZSYNCOBJECT a
 LEFT JOIN ZSYNCOBJECT t ON t.ZACCOUNT2 = a.Z_PK AND t.ZAMOUNT1 IS NOT NULL
-WHERE a.Z_ENT IN (9,10,11,12,13,14,15) AND a.ZARCHIVED = 0
+WHERE a.Z_ENT IN (10,11,12,13,14,15,16) AND a.ZARCHIVED = 0
 GROUP BY a.Z_PK
 ORDER BY a.ZNAME;
 ```
@@ -118,7 +127,7 @@ SELECT
 FROM ZSYNCOBJECT t
 LEFT JOIN ZSYNCOBJECT a ON t.ZACCOUNT2 = a.Z_PK
 LEFT JOIN ZSYNCOBJECT p ON t.ZPAYEE2 = p.Z_PK
-WHERE t.Z_ENT IN (37, 45, 46, 47) AND t.ZDATE1 IS NOT NULL
+WHERE t.Z_ENT IN (38, 44, 46, 47, 48) AND t.ZDATE1 IS NOT NULL
 ORDER BY t.ZDATE1 DESC LIMIT 20;
 ```
 
@@ -130,7 +139,7 @@ SELECT
     SUM(CASE WHEN ZAMOUNT1 > 0 THEN ZAMOUNT1 ELSE 0 END) as Income,
     SUM(CASE WHEN ZAMOUNT1 < 0 THEN ABS(ZAMOUNT1) ELSE 0 END) as Expense
 FROM ZSYNCOBJECT
-WHERE Z_ENT IN (37, 43, 45, 46, 47) AND ZDATE1 IS NOT NULL
+WHERE Z_ENT IN (38, 44, 46, 47, 48) AND ZDATE1 IS NOT NULL
 GROUP BY Month ORDER BY Month DESC LIMIT 12;
 ```
 
@@ -156,7 +165,7 @@ GROUP BY Month ORDER BY Month DESC LIMIT 12;
 
 ### 不应该做的
 
-1. **禁止写入**: 不执行任何 INSERT/UPDATE/DELETE，**唯一例外**：账单导入流程中的 `convert_refunds.py` 可以将刚导入的 Income (Z_ENT=37) 受控 UPDATE 为 Refund (Z_ENT=43)，必须先关 MoneyWiz + 备份数据库
+1. **禁止写入**: 不执行任何 INSERT/UPDATE/DELETE，**唯一例外**：账单导入流程中的 `convert_refunds.py` 可以将刚导入的 Income (Z_ENT=38) 受控 UPDATE 为 Refund (Z_ENT=44)，按 `category_pk` 受控 UPDATE `ZCATEGORYASSIGMENT` 的分类指向，并按 `original_tx_pk` 受控 INSERT `ZWITHDRAWREFUNDTRANSACTIONLINK` 关联行，必须先关 MoneyWiz + 备份数据库
 2. **隐私保护**: 不主动暴露敏感金额细节
 
 ---
@@ -199,7 +208,7 @@ python3 scripts/generate_csv.py <confirmed.json> [output_dir]
 # 也支持 stdin: cat confirmed.json | python3 generate_csv.py - [output_dir]
 # 默认输出到 ./bills/processed/，文件名自动按日期范围生成
 
-# 将 CSV 导入后的退款（Z_ENT=37 Income）转为 Refund (Z_ENT=43)
+# 将 CSV 导入后的退款（Z_ENT=38 Income）转为 Refund (Z_ENT=44)
 python3 scripts/convert_refunds.py <confirmed.json> [--dry-run]
 # 自动关闭 MoneyWiz、备份数据库到 ./bills/backups/、UPDATE Z_ENT
 # --dry-run: 仅报告匹配，不修改数据库
@@ -293,9 +302,8 @@ python3 scripts/convert_refunds.py <confirmed.json> [--dry-run]
 │ 1. 将用户修改应用到交易 JSON 数据                     │
 │ 2. 保存为临时 JSON 文件                              │
 │ 3. 调用脚本生成 CSV：                                │
-│    python3 scripts/       │
-│            generate_csv.py <confirmed.json>          │
-│            ./bills/processed/                        │
+│    python3 scripts/generate_csv.py                  │
+│            <confirmed.json> ./bills/processed/      │
 │                                                     │
 │ ⚠️ 必须用脚本生成，禁止 AI 手写 CSV 生成代码          │
 │                                                     │
@@ -313,63 +321,77 @@ python3 scripts/convert_refunds.py <confirmed.json> [--dry-run]
 步骤 4.5: 转换退款（仅当 confirmed.json 含 is_refund 时）
 ┌─────────────────────────────────────────────────────┐
 │ 背景：MoneyWiz CSV 导入器仅支持 Income/Withdraw/      │
-│ Transfer 三种类型，无法直接生成 Refund (Z_ENT=43)。  │
+│ Transfer 三种类型，无法直接生成 Refund (Z_ENT=44)。  │
 │ 退款先以 Income 形式导入，再由脚本 UPDATE 转换。      │
 │                                                     │
 │ ⚠️ 等待用户说「导入完成」后才执行                      │
 │                                                     │
 │ 1. 检查 confirmed.json 是否含 is_refund=true 条目，  │
-│    若无则跳过此步                                    │
+│    若无则跳过此步；若有，先确保每条都已钉           │
+│    category_pk（原消费分类 Z_PK），否则回补；       │
+│    能唯一定位原消费的，一并钉 original_tx_pk        │
 │ 2. 运行：                                            │
-│    python3 scripts/       │
-│            convert_refunds.py <confirmed.json>       │
+│    python3 scripts/convert_refunds.py               │
+│            <confirmed.json>                         │
 │                                                     │
 │    脚本自动：                                        │
 │    - 关闭 MoneyWiz 进程（osascript quit）            │
 │    - 备份数据库到 ./bills/backups/                   │
 │    - 对每条 is_refund 交易，按                       │
 │      (account, amount, description, ±5min) 严格     │
-│      匹配 Z_ENT=37 的 Income 条目，UPDATE 为 43      │
+│      匹配 Z_ENT=38 的 Income 条目，UPDATE 为 44      │
 │    - 单条匹配 = 1 才转换；0 或 >1 跳过并报告         │
+│    - 转换后按 category_pk 把退款分类指向原消费      │
+│      分类对象；未钉/无效 PK 报 unresolved 不动，    │
+│      不按名字或金额猜                               │
+│    - 钉了 original_tx_pk 的，再往关联表             │
+│      ZWITHDRAWREFUNDTRANSACTIONLINK 插一行，        │
+│      把退款挂回原消费交易；没钉跳过不猜             │
+│    - 删掉导入器克隆出的同名收入分类（严格           │
+│      判定：同名+收入树+无引用+无子分类）            │
 │                                                     │
-│ 3. 输出报告：成功/失败明细                           │
+│ 3. 输出报告：转换/分类/关联/克隆清理结果            │
 │ 4. 提示用户重新打开 MoneyWiz 验证                    │
 └─────────────────────────────────────────────────────┘
 ```
 
 ### AI 推测查询
 
-当 `needs_review=true` 时，AI 通过查询 MoneyWiz 历史交易推测分类：
+当 `needs_review=true` 时，AI 通过查询 MoneyWiz 历史交易推测分类。
+
+查询同时返回分类名 `Category` 和分类主键 `CategoryPK`。`CategoryPK` 是**退款钉 `category_pk` 的取值来源**（见「退款条目在 JSON 中的特殊字段」）。
 
 ```sql
 -- 1. 查询相同交易对方的历史分类
-SELECT c.ZNAME2 as Category, COUNT(*) as Count
+SELECT c.ZNAME2 as Category, c.Z_PK as CategoryPK, COUNT(*) as Count
 FROM ZSYNCOBJECT t
 JOIN ZSYNCOBJECT p ON t.ZPAYEE2 = p.Z_PK
 JOIN ZCATEGORYASSIGMENT ca ON t.Z_PK = ca.ZTRANSACTION
 JOIN ZSYNCOBJECT c ON ca.ZCATEGORY = c.Z_PK
-WHERE t.Z_ENT = 47 AND p.ZNAME5 LIKE '%交易对方关键词%'
+WHERE t.Z_ENT = 48 AND p.ZNAME5 LIKE '%交易对方关键词%'
 GROUP BY c.Z_PK ORDER BY Count DESC LIMIT 1;
 ```
 
 ```sql
 -- 2. 查询相似描述的历史分类
-SELECT c.ZNAME2 as Category, COUNT(*) as Count
+SELECT c.ZNAME2 as Category, c.Z_PK as CategoryPK, COUNT(*) as Count
 FROM ZSYNCOBJECT t
 JOIN ZCATEGORYASSIGMENT ca ON t.Z_PK = ca.ZTRANSACTION
 JOIN ZSYNCOBJECT c ON ca.ZCATEGORY = c.Z_PK
-WHERE t.Z_ENT = 47 AND t.ZDESC2 LIKE '%描述关键词%'
+WHERE t.Z_ENT = 48 AND t.ZDESC2 LIKE '%描述关键词%'
 GROUP BY c.Z_PK ORDER BY Count DESC LIMIT 1;
 ```
 
+**⚠️ 退款（is_refund=true）必做**：无论 needs_review 与否，都要跑上面的查询拿到原消费的 `CategoryPK`，写进该退款条目的 `category_pk`。溯源时若能唯一定位到原消费那笔交易，把它的 Z_PK 一并写进 `original_tx_pk`（定位不到唯一一条就不钉，绝不猜）。
+
 ### ⚠️ 分类验证（防止幻觉）
 
-**重要**：AI 在确定分类时，如果使用的分类名称不在 `category_rules.json` 的已有映射中，**必须先查询数据库验证该分类是否存在**。
+**重要**：AI 在确定分类时，如果使用的分类名称不在 `category_rules.json` 的已有映射中，**必须先查询数据库验证该分类是否存在，且收支方向要对**——分类分支出（ZTYPE2=1）和收入（ZTYPE2=2）两棵树，给支出交易配收入分类（或反过来）是错的，光验证名字存在不够。
 
 ```sql
--- 验证分类是否存在
-SELECT ZNAME2 FROM ZSYNCOBJECT
-WHERE Z_ENT = 19 AND ZNAME2 = '待验证的分类名';
+-- 验证分类是否存在且方向正确（支出交易要求 ZTYPE2=1，收入交易要求 ZTYPE2=2）
+SELECT ZNAME2, ZTYPE2 FROM ZSYNCOBJECT
+WHERE Z_ENT = 20 AND ZNAME2 = '待验证的分类名';
 ```
 
 如果查询结果为空，说明该分类不存在，需要：
@@ -379,7 +401,7 @@ WHERE Z_ENT = 19 AND ZNAME2 = '待验证的分类名';
 ```sql
 -- 查找相近分类
 SELECT ZNAME2 FROM ZSYNCOBJECT
-WHERE Z_ENT = 19 AND ZNAME2 LIKE '%关键词%';
+WHERE Z_ENT = 20 AND ZNAME2 LIKE '%关键词%';
 ```
 
 ### 配置文件
@@ -438,9 +460,9 @@ WHERE Z_ENT = 19 AND ZNAME2 LIKE '%关键词%';
 
 #### 退款的本质
 
-退款 (RefundTransaction, Z_ENT=43) 在 MoneyWiz 数据模型中**不是独立的交易类型**——它和 Income (Deposit, Z_ENT=37) 在数据库中字段完全相同（账户、金额正数、商户、描述、分类），仅 `Z_ENT` 值不同。MoneyWiz UI 上「右键转为退款」做的就是把 `Z_ENT` 从 37 改成 43，并给描述加 ` 的退款` 后缀。
+退款 (RefundTransaction, Z_ENT=44) 在 MoneyWiz 数据模型中**不是独立的交易类型**——它和 Income (Deposit, Z_ENT=38) 在数据库中字段完全相同（账户、金额正数、商户、描述、分类），仅 `Z_ENT` 值不同。MoneyWiz UI 上「右键转为退款」做的就是把 `Z_ENT` 从 38 改成 44，并给描述加 ` 的退款` 后缀。
 
-数据库中退款**不指向**原始消费交易（无关联字段），仅靠商户/分类便于报表区分。
+2026-07 模型升级新增 `ZWITHDRAWREFUNDTRANSACTIONLINK` 表（Z_ENT=51）：`ZREFUNDTRANSACTION` 指退款 Z_PK，`ZWITHDRAWTRANSACTION` 指原消费 Z_PK。升级时 MoneyWiz 会给存量退款自动补关联；`convert_refunds.py` 对钉了 `original_tx_pk` 的退款也会插入关联行（升级前的旧模型里退款与原消费没有任何关联字段）。
 
 #### 脚本识别规则
 
@@ -454,11 +476,15 @@ WHERE Z_ENT = 19 AND ZNAME2 LIKE '%关键词%';
 - `amount`: 正数
 - `transfer_account`: 空（**不是转账**）
 - `description`: `<原描述简化后> 的退款`
-- `category`: 推测原消费分类（用于 Refund 视图归类）
+- `category`: 固定 `退款收入`（**仅给 CSV 导入当占位**。退款以 Income 导入，导入器只在收入树里解析分类名，写支出分类名会被克隆成同名的顶级收入分类；真实分类由 `category_pk` 在转换时指回原消费分类对象。收入树里需要有一个「退款收入」分类，没有的话导入时会自动创建一个——它本来就该在收入树，无害）
+- `category_pk`: **原消费分类的确切 Z_PK（AI 必填，即使该退款 needs_review=false）**。退款分类必须和原消费用**同一个分类对象**，绝不新建收入分类。分类树里允许重名，光靠分类名选不对，只有钉 Z_PK 才准。取值：AI 推测查询返回的 `CategoryPK`，也就是原消费交易 `ZCATEGORYASSIGMENT.ZCATEGORY` 的实际值。脚本 `convert_refunds.py` **只认 `category_pk`**——没钉或钉了无效 PK 就报 `unresolved` 原样不动，**绝不按分类名或金额猜**（同金额的另一笔无关消费很容易撞上）。
+- `original_tx_pk`: 原消费交易的 Z_PK（可选）。AI 溯源时能唯一定位到原消费交易才钉；`convert_refunds.py` 用它往 `ZWITHDRAWREFUNDTRANSACTIONLINK` 插关联行，把退款挂回原消费。没钉就只转类型不建关联，**绝不按金额或描述猜原消费**。
 
 #### CSV 限制与变通
 
-MoneyWiz CSV 导入器（[官方文档](https://help.wiz.money/en/articles/4440549)）只支持 Income/Withdraw/Transfer 三种字段映射，**不支持** "Type/Refund" 列。所以退款必须先以 Income 导入，再由 `convert_refunds.py` 直接 UPDATE 数据库 `Z_ENT` 字段（这是 skill 唯一允许写库的脚本）。
+MoneyWiz CSV 导入器（[官方文档](https://help.wiz.money/en/articles/4440549)）只支持 Income/Withdraw/Transfer 三种字段映射，**不支持** "Type/Refund" 列。所以退款必须先以 Income 导入，再由 `convert_refunds.py` 直接 UPDATE 数据库 `Z_ENT` 字段，按 `category_pk` 把分类指回原消费分类对象，并按 `original_tx_pk` 在 `ZWITHDRAWREFUNDTRANSACTIONLINK` 建立与原消费的关联（这是 skill 唯一允许写库的脚本）。
+
+**⚠️ CSV 占位分类必须用收入树里的「退款收入」**：导入器对 Income 行只认收入分类，写支出分类名会克隆出同名收入分类，污染分类树。`convert_refunds.py` 转换后会删掉这种克隆——但只在严格证明是克隆时才删（与钉回的原分类同名、在收入树、无其他引用、无子分类），像「退款收入」这种正经分类永远不会被删。正确姿势是从源头就不让克隆产生。
 
 #### 多笔退款合并（AI 交互阶段处理）
 

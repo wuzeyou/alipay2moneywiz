@@ -275,14 +275,19 @@ def parse_alipay_csv(file_path: str, config: dict) -> dict:
         )
 
         if is_refund:
-            # Refund: imported as Income (Z_ENT=37), later converted to Refund (Z_ENT=43)
+            # Refund: imported as Income (Z_ENT=38), later converted to Refund (Z_ENT=44)
             # by convert_refunds.py. Description format: "<original> 的退款"
             base_desc = description_original[3:] if description_original.startswith("退款-") else description_original
             base_desc = simplify_description(base_desc, config)
             base_desc = apply_payee_description(payee, base_desc, config)
             tx["description"] = f"{base_desc} 的退款"
-            category, confidence = predict_category(payee_original, base_desc, "", config)
-            tx["category"] = category
+            # CSV placeholder: refunds import as Income, and the importer
+            # resolves category names among income categories only — an
+            # expense category name gets cloned into the income tree. The
+            # real category is pinned via category_pk and re-pointed by
+            # convert_refunds.py after import.
+            _, confidence = predict_category(payee_original, base_desc, "", config)
+            tx["category"] = "退款收入"
             tx["category_confidence"] = confidence
             tx["amount"] = str(abs(amount))
             tx["is_refund"] = True

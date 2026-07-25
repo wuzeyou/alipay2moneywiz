@@ -217,11 +217,16 @@ def parse_wechat_row(row: dict, config: dict) -> dict:
     is_refund = "退款" in tx_type and (tx_type.endswith("退款") or "-退款" in tx_type)
 
     if is_refund:
-        # Refund: imported as Income (Z_ENT=37), later converted to Refund (Z_ENT=43)
+        # Refund: imported as Income (Z_ENT=38), later converted to Refund (Z_ENT=44)
         # by convert_refunds.py. Description format: "<simplified> 的退款"
         tx["description"] = f"{description} 的退款"
-        category, confidence = predict_category(payee_original, description, "", config)
-        tx["category"] = category
+        # CSV placeholder: refunds import as Income, and the importer
+        # resolves category names among income categories only — an expense
+        # category name gets cloned into the income tree. The real category
+        # is pinned via category_pk and re-pointed by convert_refunds.py
+        # after import.
+        _, confidence = predict_category(payee_original, description, "", config)
+        tx["category"] = "退款收入"
         tx["category_confidence"] = confidence
         tx["amount"] = str(abs(amount))
         tx["is_refund"] = True
