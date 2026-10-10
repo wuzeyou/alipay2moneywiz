@@ -14,10 +14,50 @@ DB_PATH = Path.home() / "Library/Containers/com.moneywiz.personalfinance/Data/Do
 # Core Data timestamp offset (2001-01-01 to 1970-01-01)
 COREDATA_OFFSET = 978307200
 
-# Z_ENT values for the 2026-07 Core Data model; they shift whenever a MoneyWiz
-# update migrates the model. Verify: SELECT Z_ENT, Z_NAME FROM Z_PRIMARYKEY;
-# Deposit(38), Refund(44), TransferDeposit(46), TransferWithdraw(47), Withdraw(48)
-TRANSACTION_TYPES = (38, 44, 46, 47, 48)
+# Z_ENT numbers are assigned by the Core Data model and get reshuffled whenever a
+# MoneyWiz update migrates it — hardcoding them guarantees they go stale. Entity
+# names don't change, so everything below resolves names against Z_PRIMARYKEY at
+# query time.
+
+# Every transaction type. Leaving out RefundTransaction breaks balance math.
+TXN_ALL = ('DepositTransaction', 'RefundTransaction', 'TransferDepositTransaction',
+           'TransferWithdrawTransaction', 'WithdrawTransaction')
+
+# Real income/expense only. Transfers move money between own accounts, so
+# counting them would inflate both sides of an income/expense summary.
+TXN_NO_TRANSFER = ('DepositTransaction', 'RefundTransaction', 'WithdrawTransaction')
+
+TYPE_LABELS = {
+    'DepositTransaction': '收入',
+    'RefundTransaction': '退款',
+    'TransferDepositTransaction': '转入',
+    'TransferWithdrawTransaction': '转出',
+    'WithdrawTransaction': '支出',
+}
+
+
+def ent_in(*names):
+    """SQL fragment: Z_ENT values for the given entity names, resolved by the DB."""
+    quoted = ",".join("'%s'" % n for n in names)
+    return "(SELECT Z_ENT FROM Z_PRIMARYKEY WHERE Z_NAME IN (%s))" % quoted
+
+
+# Accounts are a multi-level hierarchy (LoanAccount→CreditCardAccount,
+# ForexAccount→InvestmentAccount), so walk Account's descendants recursively.
+ACCOUNT_ENTS = """(WITH RECURSIVE acct(e) AS (
+        SELECT Z_ENT FROM Z_PRIMARYKEY WHERE Z_NAME = 'Account'
+        UNION ALL
+        SELECT p.Z_ENT FROM Z_PRIMARYKEY p JOIN acct a ON p.Z_SUPER = a.e
+    ) SELECT e FROM acct)"""
+
+
+def type_map(conn):
+    """Current Z_ENT -> Chinese label, resolved fresh from the database."""
+    rows = conn.execute(
+        "SELECT Z_NAME, Z_ENT FROM Z_PRIMARYKEY WHERE Z_NAME IN (%s)"
+        % ",".join("'%s'" % n for n in TYPE_LABELS)
+    ).fetchall()
+    return {ent: TYPE_LABELS[name] for name, ent in rows}
 
 
 def get_connection():
@@ -40,10 +80,10 @@ def query_accounts(show_archived=False):
     conn = get_connection()
     cursor = conn.cursor()
 
-    sql = """
+    sql = f"""
     SELECT Z_PK, ZNAME, ZTYPE, ZCURRENCYNAME, ZBALLANCE, ZOPENINGBALANCE, ZARCHIVED
     FROM ZSYNCOBJECT
-    WHERE Z_ENT IN (10,11,12,13,14,15,16,17)
+    WHERE Z_ENT IN {ACCOUNT_ENTS}
     """
     if not show_archived:
         sql += " AND (ZARCHIVED = 0 OR ZARCHIVED IS NULL)"
@@ -71,27 +111,27 @@ def query_recent(limit=20):
         t.ZAMOUNT1 as Amount,
         t.ZDESC2 as Description,
         a.ZNAME as Account,
-        p.ZNAME6 as Payee,
+        p.ZNAME5 as Payee,
         a.ZCURRENCYNAME as Currency,
         t.Z_ENT as Type
     FROM ZSYNCOBJECT t
     LEFT JOIN ZSYNCOBJECT a ON t.ZACCOUNT2 = a.Z_PK
     LEFT JOIN ZSYNCOBJECT p ON t.ZPAYEE2 = p.Z_PK
-    WHERE t.Z_ENT IN {TRANSACTION_TYPES} AND t.ZDATE1 IS NOT NULL
+    WHERE t.Z_ENT IN {ent_in(*TXN_ALL)} AND t.ZDATE1 IS NOT NULL
     ORDER BY t.ZDATE1 DESC
     LIMIT ?
     """, (limit,))
 
     rows = cursor.fetchall()
+    labels = type_map(conn)
     conn.close()
 
-    type_map = {38: "收入", 44: "退款", 46: "转入", 47: "转出", 48: "支出"}
     print(f"\n{'Date':<20} {'Amount':>12} {'Type':<4} {'Account':<12} {'Description'}")
     print("-" * 75)
     for row in rows:
         date = row[0][:16] if row[0] else ""
         amount = format_amount(row[1])
-        tx_type = type_map.get(row[6], "")
+        tx_type = labels.get(row[6], "")
         account = (row[3] or "")[:12]
         desc = (row[2] or "")[:25]
         print(f"{date:<20} {amount:>12} {tx_type:<4} {account:<12} {desc}")
@@ -109,7 +149,7 @@ def query_monthly(months=6):
         SUM(CASE WHEN ZAMOUNT1 < 0 THEN ABS(ZAMOUNT1) ELSE 0 END) as Expense,
         SUM(ZAMOUNT1) as Net
     FROM ZSYNCOBJECT
-    WHERE Z_ENT IN (38, 44, 48) AND ZDATE1 IS NOT NULL
+    WHERE Z_ENT IN {ent_in(*TXN_NO_TRANSFER)} AND ZDATE1 IS NOT NULL
     GROUP BY Month
     ORDER BY Month DESC
     LIMIT ?
@@ -143,7 +183,7 @@ def query_categories(year_month=None):
     JOIN ZCATEGORYASSIGMENT ca ON t.Z_PK = ca.ZTRANSACTION
     JOIN ZSYNCOBJECT c ON ca.ZCATEGORY = c.Z_PK
     LEFT JOIN ZSYNCOBJECT pc ON c.ZPARENTCATEGORY = pc.Z_PK
-    WHERE t.Z_ENT = 48
+    WHERE t.Z_ENT = {ent_in('WithdrawTransaction')}
       AND t.ZAMOUNT1 < 0
       AND strftime('%Y-%m', datetime(t.ZDATE1 + {COREDATA_OFFSET}, 'unixepoch', 'localtime')) = ?
     GROUP BY c.Z_PK
@@ -173,13 +213,13 @@ def query_payees(limit=15):
 
     cursor.execute(f"""
     SELECT
-        p.ZNAME6 as Payee,
+        p.ZNAME5 as Payee,
         SUM(ABS(t.ZAMOUNT1)) as Total,
         COUNT(*) as Count,
         AVG(ABS(t.ZAMOUNT1)) as Avg
     FROM ZSYNCOBJECT t
     JOIN ZSYNCOBJECT p ON t.ZPAYEE2 = p.Z_PK
-    WHERE t.Z_ENT = 48 AND t.ZAMOUNT1 < 0
+    WHERE t.Z_ENT = {ent_in('WithdrawTransaction')} AND t.ZAMOUNT1 < 0
     GROUP BY p.Z_PK
     ORDER BY Total DESC
     LIMIT ?
@@ -206,28 +246,28 @@ def search_transactions(keyword, limit=30):
         t.ZAMOUNT1 as Amount,
         t.ZDESC2 as Description,
         a.ZNAME as Account,
-        p.ZNAME6 as Payee,
+        p.ZNAME5 as Payee,
         t.Z_ENT as Type
     FROM ZSYNCOBJECT t
     LEFT JOIN ZSYNCOBJECT a ON t.ZACCOUNT2 = a.Z_PK
     LEFT JOIN ZSYNCOBJECT p ON t.ZPAYEE2 = p.Z_PK
-    WHERE t.Z_ENT IN {TRANSACTION_TYPES}
+    WHERE t.Z_ENT IN {ent_in(*TXN_ALL)}
       AND t.ZDATE1 IS NOT NULL
-      AND (t.ZDESC2 LIKE ? OR p.ZNAME6 LIKE ?)
+      AND (t.ZDESC2 LIKE ? OR p.ZNAME5 LIKE ?)
     ORDER BY t.ZDATE1 DESC
     LIMIT ?
     """, (f"%{keyword}%", f"%{keyword}%", limit))
 
     rows = cursor.fetchall()
+    labels = type_map(conn)
     conn.close()
 
-    type_map = {38: "收入", 44: "退款", 46: "转入", 47: "转出", 48: "支出"}
     print(f"\nSearch results for '{keyword}':")
     print(f"\n{'Date':<20} {'Amount':>12} {'Type':<4} {'Account':<12} {'Description'}")
     print("-" * 70)
     for row in rows:
         date = row[0][:16] if row[0] else ""
-        tx_type = type_map.get(row[5], "")
+        tx_type = labels.get(row[5], "")
         print(f"{date:<20} {format_amount(row[1]):>12} {tx_type:<4} {(row[3] or ''):<12} {(row[2] or '')[:25]}")
 
     if not rows:

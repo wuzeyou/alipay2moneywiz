@@ -2,7 +2,7 @@
 
 > 将支付宝、微信账单导入 MoneyWiz 的 [Claude Code Skill](https://docs.claude.com/en/docs/claude-code)。
 
-支持账户映射、智能分类预测、商户/描述简化、退款类型自动转换。
+支持账户映射、智能分类预测、商户/描述简化、退款类型自动转换、非人民币账户换算。
 
 ---
 
@@ -73,6 +73,7 @@ AI 会按 [`SKILL.md`](./SKILL.md) 的协议执行：解析 → 推测分类 →
 
 ```bash
 python3 scripts/convert_bill.py <账单文件>           # 解析为 JSON
+python3 scripts/apply_live_fx.py parsed.json out.json  # 外币账户按当日汇率重算（可选）
 python3 scripts/generate_csv.py confirmed.json      # 生成 CSV
 python3 scripts/convert_refunds.py confirmed.json   # 退款转换（写库前会备份）
 python3 scripts/moneywiz_query.py recent 30         # 查询历史交易
@@ -91,13 +92,19 @@ alipay2moneywiz/
 
 ## 退款处理（核心特性）
 
-MoneyWiz 的 CSV 导入器仅支持 Income / Withdraw / Transfer 三种类型，**无法直接生成 Refund (Z_ENT=44)**。本 Skill 的处理方式：
+MoneyWiz 的 CSV 导入器仅支持 Income / Withdraw / Transfer 三种类型，**无法直接生成 Refund**。本 Skill 的处理方式：
 
 1. 解析阶段识别退款（支付宝 `交易分类=退款`、微信 `交易类型` 含 `-退款`），在 JSON 标记 `is_refund: true`，CSV 写为 Income，分类占位用收入分类「退款收入」（写支出分类名会被导入器克隆成同名收入分类）。
 2. 你在 MoneyWiz 完成 CSV 导入。
 3. 运行 `convert_refunds.py`，自动关闭 MoneyWiz、备份数据库到 `./bills/backups/`、把刚导入的 Income 条目按严格匹配（账户 + 金额 + 描述 + ±5min 时间窗口）UPDATE 为 Refund，再按 `category_pk` 把分类指回原消费分类、按 `original_tx_pk` 关联原消费交易，并清理导入器克隆出的分类。
 
-Refund (Z_ENT=44) 与 Income (Z_ENT=38) 在数据库中字段完全一致，仅 `Z_ENT` 标记不同——本 Skill 利用了这个事实，绕过 CSV 导入器的限制。注意 Z_ENT 编号随 MoneyWiz 升级迁移模型而漂移（此处为 2026-07 之后的编号），以 `Z_PRIMARYKEY` 表为准。
+Refund（`RefundTransaction`）与 Income（`DepositTransaction`）在数据库中字段完全一致，仅 `Z_ENT` 标记不同——本 Skill 利用了这个事实，绕过 CSV 导入器的限制。Z_ENT 编号会随 MoneyWiz 升级迁移模型而整体变动，所以脚本一律按实体名到 `Z_PRIMARYKEY` 表实时查编号，不写死数字。
+
+## 非人民币账户换算
+
+支付宝/微信账单里的金额永远是人民币，但 MoneyWiz 按账户自己的币种记账，而 CSV 导入器没有币种列——13.25 元人民币的消费导进新加坡元账户，会被直接记成 13.25 新元。
+
+所以换算在生成 CSV 之前完成：在 `config/account_map.json` 的 `account_currency` 里登记外币账户，解析时按 `fx_fallback_rates` 的近似汇率换算，可再用 `apply_live_fx.py` 按当日汇率重算。人民币原值写进 CSV 备注列，方便日后和银行账单对照。汇率只是估算，真实扣款以银行账单为准。
 
 ## 数据库安全
 

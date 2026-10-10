@@ -15,6 +15,9 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).parent.parent
 CONFIG_DIR = SKILL_DIR / "config"
 
+sys.path.insert(0, str(Path(__file__).parent))
+from fx import apply_fx  # noqa: E402
+
 
 def load_config():
     """Load all config files."""
@@ -47,34 +50,57 @@ def map_account(payment_method: str, config: dict) -> str:
     return config.get("account_map", {}).get("defaults", {}).get("wechat", "微信零钱")
 
 
-def predict_category(payee: str, description: str, original_category: str, config: dict) -> tuple:
+def _resolve_category(value, is_expense: bool):
+    """Resolve a rule value to a category name, or None if it does not apply.
+
+    A plain string value applies in both directions. A dict value of the form
+    {"expense": ..., "income": ...} picks by the transaction's direction, so a
+    payee that both pays out and takes in (闲鱼: resale income vs. platform
+    fees) never stamps an income category onto an expense. Returning None lets
+    the caller fall through to the next rule.
+    """
+    if isinstance(value, dict):
+        return value.get("expense" if is_expense else "income")
+    return value
+
+
+def predict_category(payee: str, description: str, original_category: str,
+                     config: dict, is_expense: bool = True) -> tuple:
     """Predict category. Returns (category, confidence).
 
-    Priority: description keywords > payee > original category
+    Priority: description keywords > payee. The bill's own transaction type is
+    never used as a prediction (see below).
     This ensures specific items like coffee are correctly categorized
     even when ordered through platforms like Meituan.
     """
     rules = config.get("category_rules", {})
 
     # 1. Keyword match in description (highest priority)
-    for keyword, category in rules.get("keyword_category", {}).items():
+    for keyword, value in rules.get("keyword_category", {}).items():
         if keyword in description:
-            return category, "high"
+            category = _resolve_category(value, is_expense)
+            if category:
+                return category, "high"
 
     # 2. Exact match payee
-    for payee_key, category in rules.get("payee_category", {}).items():
+    for payee_key, value in rules.get("payee_category", {}).items():
         if payee_key in payee:
-            return category, "high"
+            category = _resolve_category(value, is_expense)
+            if category:
+                return category, "high"
 
     # 3. Keyword match in payee (fallback)
-    for keyword, category in rules.get("keyword_category", {}).items():
+    for keyword, value in rules.get("keyword_category", {}).items():
         if keyword in payee:
-            return category, "medium"
+            category = _resolve_category(value, is_expense)
+            if category:
+                return category, "medium"
 
-    # 4. Use original if available
-    if original_category and original_category.strip() and original_category.strip() != "/":
-        return original_category, "low"
-
+    # No rule matched. Never fall back to original_category: WeChat's 交易类型
+    # values (商户消费, 二维码收款, ...) are not MoneyWiz categories, so
+    # returning one yields a plausible-looking but invalid category that
+    # misleads the AI review step. The raw value stays available in the JSON
+    # output's original_category field for reference.
     return "", "none"
 
 
@@ -225,6 +251,8 @@ def parse_wechat_row(row: dict, config: dict) -> dict:
         # category name gets cloned into the income tree. The real category
         # is pinned via category_pk and re-pointed by convert_refunds.py
         # after import.
+        # Default is_expense=True: this predicts the ORIGINAL PURCHASE's category,
+        # not the incoming refund's.
         _, confidence = predict_category(payee_original, description, "", config)
         tx["category"] = "退款收入"
         tx["category_confidence"] = confidence
@@ -236,11 +264,15 @@ def parse_wechat_row(row: dict, config: dict) -> dict:
         tx["category_confidence"] = "high"
         tx["amount"] = str(-abs(amount)) if "还款" in description else str(amount)
     else:
-        category, confidence = predict_category(payee_original, description, tx_type, config)
+        category, confidence = predict_category(payee_original, description, tx_type,
+                                                config, is_expense=income_expense == "支出")
         tx["category"] = category
         tx["category_confidence"] = confidence
         tx["amount"] = str(-abs(amount)) if income_expense == "支出" else str(amount)
 
+    # Bills report CNY; non-CNY accounts must be converted before the CSV,
+    # since the importer reads every amount as the account's own currency.
+    apply_fx(tx, config)
     tx["needs_review"] = tx["category_confidence"] in ["low", "none"]
     return tx
 

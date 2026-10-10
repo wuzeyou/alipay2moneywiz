@@ -26,5 +26,19 @@
   "defaults": {
     "alipay": "支付宝余额",
     "wechat": "微信零钱"
+  },
+
+  "_account_currency_comment": "Accounts NOT denominated in CNY. Alipay/WeChat bills always report CNY, but the MoneyWiz CSV importer has no currency column and reads every amount as the account's own currency. Amounts for these accounts are converted before the CSV is written (see scripts/fx.py). Leave empty if all your accounts are CNY.",
+  "account_currency": {
+    "<your-foreign-currency-account>": "SGD"
+  },
+
+  "_fx_fallback_rates_comment": "CNY per 1 unit of foreign currency. Deliberately approximate — the real charge is only known once the card statement arrives. Refresh with scripts/apply_live_fx.py.",
+  "fx_fallback_rates": {
+    "SGD": 5.28,
+    "USD": 6.76,
+    "EUR": 7.8,
+    "HKD": 0.86,
+    "JPY": 0.0428
   }
 }
